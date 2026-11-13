@@ -18,15 +18,14 @@ $StorageAccountName = 'mbtfdev8d7fc1c'
 $ContainerName = 'tfstate-dev'
 $ResourceGroups = @('rg-mongo-bench-dev-data', 'rg-mongo-bench-dev-nodes', $ResourceGroupName)
 $Projects = @(
-    @{ Name = 'app'; Key = 'app'; Protected = @{} },
-    @{ Name = 'db'; Key = 'db'; Protected = @{
+    @{ Name = 'app'; Protected = @{} },
+    @{ Name = 'db'; Protected = @{
         kubernetes_namespace_v1 = 'db'
         kubernetes_secret_v1 = 'mongodb'
         kubernetes_persistent_volume_v1 = 'mongodb'
         kubernetes_persistent_volume_claim_v1 = 'mongodb'
     } },
-    # Keep the deployed state blob key independent of the local project name.
-    @{ Name = 'core'; Key = 'core-compute'; Protected = @{
+    @{ Name = 'core'; Protected = @{
         azurerm_resource_group = 'data'
         azurerm_managed_disk = 'mongodb'
     } }
@@ -109,7 +108,7 @@ try {
         $project.HasResources = $false
         $blobExists = Invoke-Azure @('storage', 'blob', 'exists', '--auth-mode', 'login',
             '--account-name', $StorageAccountName, '--container-name', $ContainerName,
-            '--name', "mongo-bench/dev/$($project.Key).tfstate")
+            '--name', "mongo-bench/dev/$($project.Name).tfstate")
         if (-not $blobExists.exists) {
             Write-Host "$($project.Name): no state blob; skipping Terraform."
             continue

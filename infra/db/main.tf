@@ -60,7 +60,7 @@ resource "kubernetes_persistent_volume_v1" "mongodb" {
   }
   spec {
     capacity = {
-      storage = "${data.terraform_remote_state.infrastructure.outputs.mongodb_disk_size_gb}Gi"
+      storage = "${data.terraform_remote_state.core.outputs.mongodb_disk_size_gb}Gi"
     }
     access_modes                     = ["ReadWriteOnce"]
     persistent_volume_reclaim_policy = "Retain"
@@ -74,7 +74,7 @@ resource "kubernetes_persistent_volume_v1" "mongodb" {
     persistent_volume_source {
       csi {
         driver        = "disk.csi.azure.com"
-        volume_handle = data.terraform_remote_state.infrastructure.outputs.mongodb_disk_id
+        volume_handle = data.terraform_remote_state.core.outputs.mongodb_disk_id
         fs_type       = "ext4"
         volume_attributes = {
           cachingMode = "None"
@@ -99,7 +99,7 @@ resource "kubernetes_persistent_volume_claim_v1" "mongodb" {
     volume_name        = kubernetes_persistent_volume_v1.mongodb.metadata[0].name
     resources {
       requests = {
-        storage = "${data.terraform_remote_state.infrastructure.outputs.mongodb_disk_size_gb}Gi"
+        storage = "${data.terraform_remote_state.core.outputs.mongodb_disk_size_gb}Gi"
       }
     }
   }

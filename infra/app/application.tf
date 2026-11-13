@@ -1,5 +1,5 @@
 locals {
-  application_image = var.application == null ? null : "${data.terraform_remote_state.infrastructure.outputs.acr_login_server}/mongo-bench:${var.application.image_tag}"
+  application_image = var.application == null ? null : "${data.terraform_remote_state.core.outputs.acr_login_server}/mongo-bench:${var.application.image_tag}"
 }
 
 # Explicit opt-in until the Go service and its Dockerfile exist. No Azure passwords:
@@ -17,7 +17,7 @@ resource "terraform_data" "publish_application" {
     command     = file("${path.module}/scripts/Publish-AppImage.ps1")
     environment = {
       MONGO_BENCH_BUILD_CONTEXT = abspath(var.application.build_context)
-      MONGO_BENCH_ACR_NAME      = data.terraform_remote_state.infrastructure.outputs.acr_name
+      MONGO_BENCH_ACR_NAME      = data.terraform_remote_state.core.outputs.acr_name
       MONGO_BENCH_IMAGE         = local.application_image
     }
   }

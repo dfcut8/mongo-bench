@@ -2,7 +2,7 @@ mock_provider "kubernetes" {}
 mock_provider "random" {}
 
 override_data {
-  target = data.terraform_remote_state.infrastructure
+  target = data.terraform_remote_state.core
   values = {
     outputs = {
       aks_host                   = "https://aks.example.test"
@@ -19,6 +19,10 @@ override_data {
 run "persistent_database" {
   command = plan
 
+  assert {
+    condition     = data.terraform_remote_state.core.config.key == regex("key\\s*=\\s*\"([^\"]+)\"", file("${path.module}/../core/backend.tf"))[0]
+    error_message = "Db must read the state written by the core project."
+  }
   assert {
     condition     = kubernetes_persistent_volume_v1.mongodb.spec[0].persistent_volume_reclaim_policy == "Retain" && kubernetes_persistent_volume_claim_v1.mongodb.spec[0].volume_name == "mongo-bench-db-dev"
     error_message = "The claim must reuse the retained static data volume."

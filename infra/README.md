@@ -16,11 +16,36 @@ Apply in order: **core → db → app**. Routine service releases run only `app`
 
 | Project | State blob in `mbtfdev8d7fc1c` / `tfstate-dev` |
 | --- | --- |
-| `core` | `mongo-bench/dev/core-compute.tfstate` |
+| `core` | `mongo-bench/dev/core.tfstate` |
 | `db` | `mongo-bench/dev/db.tfstate` |
 | `app` | `mongo-bench/dev/app.tfstate` |
 
-The `core` project retains the existing `core-compute.tfstate` blob key so existing deployments keep their state.
+State keys match the project names. Existing deployments using `core-compute.tfstate` need the [one-time state migration](#migrate-the-legacy-core-state-key) below before deployment or teardown.
+
+## Migrate the legacy core state key
+
+Skip this section for a fresh deployment. If core was already deployed using `mongo-bench/dev/core-compute.tfstate`, migrate that state to `mongo-bench/dev/core.tfstate` **before running the deployment wrapper or teardown**. Pause all infrastructure runs for the migration. The wrapper uses `init -reconfigure`, which selects a backend without copying existing state; using it first would select an empty state at the new key.
+
+Use the intended Azure CLI account/subscription and the default Terraform workspace, with `TF_DATA_DIR`, `TF_WORKSPACE`, and `TF_CLI_ARGS*` unset in this shell. From `infra/`, first initialize core against the old key explicitly, even if its local `.terraform/` cache is missing:
+
+```powershell
+az account set --subscription b8d7fc1c-6003-4425-baf0-15d8db0e1714
+terraform -chdir=core init -reconfigure -lockfile=readonly -backend-config="key=mongo-bench/dev/core-compute.tfstate"
+terraform -chdir=core state list
+```
+
+Stop if either command fails or the expected existing Azure resource addresses are absent. Back up the old state securely before continuing; it can contain credentials. If `core.tfstate` already contains resources, stop and reconcile both states instead of overwriting either.
+
+Then let Terraform migrate to the new key checked into `core/backend.tf`, confirming its state-copy prompt:
+
+```powershell
+terraform -chdir=core init -migrate-state -lock-timeout=5m -lockfile=readonly
+terraform -chdir=core state list
+```
+
+Both state listings must contain the same resource addresses. Do not use `-reconfigure` for this second init: [Terraform requires `-migrate-state` to copy the state](https://developer.hashicorp.com/terraform/cli/commands/init#backend-initialization). Discard any saved `dev.tfplan` files in all three projects, then generate fresh plans with the wrapper in core → db → app order. A state-key rename should not create or replace managed resources. Db and app now read core's new key; their own keys stay unchanged. Remote-state data-source labels also match their projects (`core` and `db`); these reads do not rename managed resources.
+
+Keep the legacy blobs/version history until the migration and plans are verified. The older `mongo-bench/dev/terraform.tfstate` key predates the split into projects; it is not a fourth current project. Inspect its resource addresses before deciding how to archive or migrate it; do not merge it into core or delete it solely because its name is old.
 
 ## Resources
 

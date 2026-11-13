@@ -50,7 +50,10 @@ function az {
         'storage account' { return '[{"name":"mbtfdev8d7fc1c"}]' }
         'storage blob' {
             $key = $arguments[[Array]::IndexOf($arguments, '--name') + 1]
-            Assert-True ($key -in @('mongo-bench/dev/app.tfstate', 'mongo-bench/dev/db.tfstate', 'mongo-bench/dev/core-compute.tfstate')) 'Project renames must preserve deployed state blob keys.'
+            Assert-True ($key -in @('mongo-bench/dev/app.tfstate', 'mongo-bench/dev/db.tfstate', 'mongo-bench/dev/core.tfstate')) 'State blob keys must match the project names.'
+            $project = [IO.Path]::GetFileNameWithoutExtension($key)
+            $backend = Get-Content -LiteralPath (Join-Path $fixture "$project/backend.tf") -Raw
+            Assert-True ($backend -match ('key\s*=\s*"' + [regex]::Escape($key) + '"')) 'Teardown must inspect the same state that Terraform will destroy.'
             $exists = $key -notin $global:MongoBenchDestroyTest.MissingBlobs
             return (@{ exists = $exists } | ConvertTo-Json)
         }
