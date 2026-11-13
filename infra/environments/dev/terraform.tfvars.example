@@ -1,8 +1,0 @@
-atlas_org_id = "replace-with-atlas-organization-id"
-# Choose an Azure region where Atlas supports M0; use its Atlas region name.
-atlas_region = "replace-with-atlas-region"
-
-# Add only trusted client networks. No IP addresses are allowed by default.
-allowed_cidrs = {
-  # "203.0.113.10/32" = "Developer workstation"
-}

@@ -2,7 +2,7 @@
 
 ## Goal and scope
 
-Build a Go HTTP API backed by MongoDB Atlas Free (M0) on Azure for the initial experiment. Clients manage libraries, books, and members, and record books being borrowed and returned. There is no user interface.
+Build a Go HTTP API backed by self-hosted MongoDB on Azure Kubernetes Service (AKS) for the initial experiment. Clients manage libraries, books, and members, and record books being borrowed and returned. There is no user interface.
 
 This document describes a proposed first version, not an implementation. Authentication, deployment details, and several product rules need decisions before production use.
 
@@ -10,19 +10,19 @@ This document describes a proposed first version, not an implementation. Authent
 
 ```mermaid
 flowchart LR
-    Client[API client] -->|HTTPS / JSON| API[Go library service]
-    API -->|MongoDB driver / TLS| DB[(MongoDB Atlas Free)]
+    Client[API client] -->|HTTP / JSON; HTTPS before production| API[Go service in mongo-bench-app-dev]
+    API -->|MongoDB driver / authenticated internal connection| DB[(MongoDB in mongo-bench-db-dev)]
 ```
 
 The service is stateless: multiple instances can serve requests against the same database. MongoDB is the source of truth. Configuration supplies the connection URI, database name, server address, and operational settings; secrets come from the deployment environment or a secret store, not the repository.
 
 ## Initial database deployment decision
 
-The dev Terraform configuration targets one MongoDB Atlas Free (M0) cluster on Azure, replacing the earlier Flex choice to minimize cost. It has not yet been provisioned. See [infra/README.md](../infra/README.md) for deployment and access setup.
+The dev Terraform configuration targets a dedicated AKS cluster and Basic ACR in Azure North Central US. MongoDB runs as one authenticated replica-set member in `mongo-bench-db-dev`, supporting transactions without providing high availability. The future Go service runs in `mongo-bench-app-dev`. Production will get a separate cluster and Terraform state later; the dev cluster will not host prod namespaces. See [infra/README.md](../infra/README.md) for provisioning, image publishing, and deployment.
 
-Free is intended for development and has capacity and operational limits, including no managed backups or private endpoints. Atlas can pause inactive free clusters. Confirm the chosen Azure region supports M0 and validate the required transaction, index, and concurrency behavior against the deployment. If this experiment needs more capacity or features, reassess Flex or a dedicated tier and associated costs.
+MongoDB uses an Azure managed disk mounted at `/data/db` through a retained, statically bound persistent volume and claim. The disk lives in its own resource group, outside the AKS node resource group, and Terraform protects it from deletion. Pod and image replacements reuse the same claim. Disk retention is not a backup: backups, restore procedures, MongoDB upgrades, and database availability are now our responsibility.
 
-Reference: [Atlas Free cluster limits](https://www.mongodb.com/docs/atlas/reference/free-shared-limitations/).
+AKS pulls application images from ACR using its kubelet managed identity. Developers use Microsoft Entra sign-in to push images and access Kubernetes. The infrastructure monorepo under `infra/` contains three sibling Terraform projects: `terraform-core-compute` owns Azure resources, identities, and the persistent disk; `terraform-db` deploys MongoDB and its database namespace, volume bindings, and credentials into that cluster; `terraform-app` consumes their outputs and creates the service namespace and connection Secret, and optionally builds/pushes and deploys the future service from the developer's machine. Routine service releases apply only `terraform-app` and do not plan or redeploy MongoDB. No application or Dockerfile exists yet.
 
 ## Service design
 
@@ -66,15 +66,15 @@ Use `201 Created` for creation, `200 OK` for reads and updates, and `204 No Cont
 
 ## Operations and quality
 
-- Require TLS for cloud database connections and HTTPS at the service boundary; use least-privilege database credentials and a secret store in deployment.
-- Validate the MongoDB driver features, indexes, and transactions used by the implementation against Atlas Free. Repeat compatibility and concurrency testing before any future provider change; MongoDB-compatible products can differ in behavior.
+- The dev database uses authenticated internal TCP, a ClusterIP/headless service, and a network policy allowing only the app and database namespaces. It has no public database endpoint. TLS for MongoDB and HTTPS at the service boundary are required before production; neither is configured by the initial dev deployment. The application uses a database-scoped read/write user, not the root account.
+- Validate the MongoDB driver features, indexes, and transactions used by the implementation against the self-hosted replica set. Repeat compatibility and concurrency testing before any future deployment change.
 - Provide database connection and request timeouts, graceful shutdown, readiness checks, structured logs, and basic request/error/latency metrics.
 - Unit-test domain and application rules. Integration-test persistence against a MongoDB deployment with the required transaction and index support, including concurrent attempts to borrow the same book and deletion races.
 - Enforce referential and deletion invariants under concurrency, using transactions or another database-enforced strategy rather than relying on unprotected read-then-write checks.
 
 ## Open decisions
 
-- Azure region, API hosting environment, database billing setup, and deployment automation.
+- Production cluster topology, availability requirements, MongoDB replication, backups/restore testing, TLS, and deployment automation beyond local Terraform.
 - Authentication, authorization, and tenant boundaries for API clients.
 - Required fields, validation rules, privacy and retention requirements for members.
 - Loan duration, renewals, borrowing limits, overdue handling, and lost or damaged books.
