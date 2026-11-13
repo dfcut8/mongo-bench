@@ -11,7 +11,7 @@ resource "kubernetes_secret_v1" "app_database" {
   }
   data = {
     # terraform_remote_state does not propagate output sensitivity annotations.
-    MONGODB_URI      = sensitive(data.terraform_remote_state.database.outputs.application_mongodb_uri)
-    MONGODB_DATABASE = data.terraform_remote_state.database.outputs.database_name
+    MONGODB_URI      = sensitive(data.terraform_remote_state.db.outputs.application_mongodb_uri)
+    MONGODB_DATABASE = data.terraform_remote_state.db.outputs.database_name
   }
 }

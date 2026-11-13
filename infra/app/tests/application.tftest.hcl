@@ -1,7 +1,7 @@
 mock_provider "kubernetes" {}
 
 override_data {
-  target = data.terraform_remote_state.infrastructure
+  target = data.terraform_remote_state.core
   values = {
     outputs = {
       aks_host                   = "https://aks.example.test"
@@ -14,7 +14,7 @@ override_data {
 }
 
 override_data {
-  target = data.terraform_remote_state.database
+  target = data.terraform_remote_state.db
   values = {
     outputs = {
       database_name           = "mongo_bench"
@@ -25,6 +25,14 @@ override_data {
 
 run "application_namespace_without_image" {
   command = plan
+  assert {
+    condition     = data.terraform_remote_state.core.config.key == regex("key\\s*=\\s*\"([^\"]+)\"", file("${path.module}/../core/backend.tf"))[0]
+    error_message = "App must read the state written by the core project."
+  }
+  assert {
+    condition     = data.terraform_remote_state.db.config.key == regex("key\\s*=\\s*\"([^\"]+)\"", file("${path.module}/../db/backend.tf"))[0]
+    error_message = "App must read the state written by the db project."
+  }
   assert {
     condition     = kubernetes_namespace_v1.app.metadata[0].name == "mongo-bench-app-dev" && length(kubernetes_deployment_v1.application) == 0 && length(terraform_data.publish_application) == 0
     error_message = "Create the application namespace without requiring a service image or Docker build."
