@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Build a Go service that manages libraries through an API. It connects to MongoDB hosted in the cloud, most likely a managed service on Azure. The service has no UI.
+Build a Go service that manages libraries through an API. The service and self-hosted MongoDB run on Azure Kubernetes Service (AKS), with images in Azure Container Registry (ACR). Dev has a dedicated cluster; prod will use a separate cluster later. The service has no UI.
 
 ## Scope
 
@@ -15,6 +15,8 @@ See [docs/architecture.md](docs/architecture.md) for the proposed architecture, 
 ## Repository structure
 
 This repository owns one service. Keep the Go module at the repository root, with executable entry points under `cmd/` and implementation packages under `internal/`; do not introduce a top-level `src/` directory for now. Keep service documentation under `docs/` and infrastructure code under `infra/`. Choose package boundaries as the implementation develops rather than creating a fixed hierarchy in advance.
+
+Treat `infra/` as the infrastructure monorepo root. Its sibling Terraform projects are `terraform-core-compute` (Azure compute, registry, identities, and persistent disk), `terraform-db` (MongoDB, database credentials, and persistent volume bindings), and `terraform-app` (application namespace, connection Secret, and service deployment). Each project has its own Terraform root, providers, lock file, and state. Apply core-compute, then db, then app. Routine app releases must not plan or apply database resources.
 
 ## Implementation guidance
 

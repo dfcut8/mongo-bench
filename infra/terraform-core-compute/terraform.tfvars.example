@@ -1,0 +1,11 @@
+location = "northcentralus"
+
+# The signed-in Terraform caller is included automatically.
+# developer_object_ids = ["additional-entra-user-object-id"]
+
+# Optional: restrict the public AKS API to your actual public egress IP(s).
+# aks_api_allowed_cidrs = ["203.0.113.10/32"]
+
+# node_vm_size         = "Standard_D4s_v5"
+# node_count           = 2
+# mongodb_disk_size_gb = 32

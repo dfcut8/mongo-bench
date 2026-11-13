@@ -12,7 +12,7 @@ if (-not $PSBoundParameters.ContainsKey('Environment')) {
 }
 
 $SubscriptionId = 'b8d7fc1c-6003-4425-baf0-15d8db0e1714'
-$Location = 'eastus'
+$Location = 'northcentralus'
 $ResourceGroupName = "rg-mongo-bench-$Environment"
 $StorageAccountName = "mbtf${Environment}8d7fc1c"
 $ContainerName = "tfstate-$Environment"
