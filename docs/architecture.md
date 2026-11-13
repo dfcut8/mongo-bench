@@ -2,7 +2,7 @@
 
 ## Goal and scope
 
-Build a Go HTTP API backed by MongoDB Atlas Flex on Azure for the initial experiment. Clients manage libraries, books, and members, and record books being borrowed and returned. There is no user interface.
+Build a Go HTTP API backed by MongoDB Atlas Free (M0) on Azure for the initial experiment. Clients manage libraries, books, and members, and record books being borrowed and returned. There is no user interface.
 
 This document describes a proposed first version, not an implementation. Authentication, deployment details, and several product rules need decisions before production use.
 
@@ -11,22 +11,18 @@ This document describes a proposed first version, not an implementation. Authent
 ```mermaid
 flowchart LR
     Client[API client] -->|HTTPS / JSON| API[Go library service]
-    API -->|MongoDB driver / TLS| DB[(MongoDB Atlas Flex)]
+    API -->|MongoDB driver / TLS| DB[(MongoDB Atlas Free)]
 ```
 
 The service is stateless: multiple instances can serve requests against the same database. MongoDB is the source of truth. Configuration supplies the connection URI, database name, server address, and operational settings; secrets come from the deployment environment or a secret store, not the repository.
 
 ## Initial database deployment decision
 
-Selected on 2026-11-13: MongoDB Atlas Flex on Azure, targeting its lowest usage-based price for this low-load experiment. This records the deployment choice; a cluster has not yet been provisioned.
+The dev Terraform configuration targets one MongoDB Atlas Free (M0) cluster on Azure, replacing the earlier Flex choice to minimize cost. It has not yet been provisioned. See [infra/README.md](../infra/README.md) for deployment and access setup.
 
-- Flex is a shared tier, not a selectable CPU/RAM instance size. The base price is approximately US$8 per 30 days (US$0.011/hour), covering up to 100 database operations per second.
-- Storage is limited to 5 GB, including documents and indexes.
-- Higher operation rates increase the Flex cluster charge automatically, up to the advertised US$30 per month. The base price is not a configured spending cap; load tests can raise usage charges.
-- Select an Azure region supported by Flex when provisioning, preferably the same region as the API. The API hosting service and region remain open.
-- Keep connection settings and credentials external to the code, and preserve the persistence boundary so a future provider change can be validated without changing the HTTP API.
+Free is intended for development and has capacity and operational limits, including no managed backups or private endpoints. Atlas can pause inactive free clusters. Confirm the chosen Azure region supports M0 and validate the required transaction, index, and concurrency behavior against the deployment. If this experiment needs more capacity or features, reassess Flex or a dedicated tier and associated costs.
 
-Pricing reference: [Atlas Flex costs and usage](https://www.mongodb.com/docs/atlas/billing/atlas-flex-costs/), checked on 2026-11-13. Verify current pricing when provisioning. Revisit the tier if the experiment outgrows its capacity or requires additional operational features.
+Reference: [Atlas Free cluster limits](https://www.mongodb.com/docs/atlas/reference/free-shared-limitations/).
 
 ## Service design
 
@@ -71,14 +67,14 @@ Use `201 Created` for creation, `200 OK` for reads and updates, and `204 No Cont
 ## Operations and quality
 
 - Require TLS for cloud database connections and HTTPS at the service boundary; use least-privilege database credentials and a secret store in deployment.
-- Validate the MongoDB driver features, indexes, and transactions used by the implementation against Atlas Flex. Repeat compatibility and concurrency testing before any future provider change; MongoDB-compatible products can differ in behavior.
+- Validate the MongoDB driver features, indexes, and transactions used by the implementation against Atlas Free. Repeat compatibility and concurrency testing before any future provider change; MongoDB-compatible products can differ in behavior.
 - Provide database connection and request timeouts, graceful shutdown, readiness checks, structured logs, and basic request/error/latency metrics.
 - Unit-test domain and application rules. Integration-test persistence against a MongoDB deployment with the required transaction and index support, including concurrent attempts to borrow the same book and deletion races.
 - Enforce referential and deletion invariants under concurrency, using transactions or another database-enforced strategy rather than relying on unprotected read-then-write checks.
 
 ## Open decisions
 
-- Azure region, API hosting environment, database provisioning and billing setup, and deployment automation.
+- Azure region, API hosting environment, database billing setup, and deployment automation.
 - Authentication, authorization, and tenant boundaries for API clients.
 - Required fields, validation rules, privacy and retention requirements for members.
 - Loan duration, renewals, borrowing limits, overdue handling, and lost or damaged books.
