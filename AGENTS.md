@@ -12,6 +12,10 @@ Build a Go service that manages libraries through an API. It connects to MongoDB
 
 See [docs/architecture.md](docs/architecture.md) for the proposed architecture, API, data model, and initial assumptions. Treat open decisions there as decisions to revisit, not implemented behavior.
 
+## Repository structure
+
+This repository owns one service. Keep the Go module at the repository root, with executable entry points under `cmd/` and implementation packages under `internal/`; do not introduce a top-level `src/` directory for now. Keep service documentation under `docs/` and infrastructure code under `infra/`. Choose package boundaries as the implementation develops rather than creating a fixed hierarchy in advance.
+
 ## Implementation guidance
 
 Keep HTTP handling, business rules, and MongoDB persistence separate. Pass configuration and dependencies explicitly, use Go contexts for request and database operations, and keep credentials out of source control. Preserve the borrowing invariants when changing the data model or persistence logic. Add focused tests for business rules and integration tests for database behavior as implementation is introduced.
