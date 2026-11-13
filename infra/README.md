@@ -4,20 +4,23 @@
 
 ```text
 infra/
-  terraform-core-compute/  AKS, ACR, managed identities, permissions, Azure disk
-  terraform-db/            MongoDB, DB namespace, users, persistent volume bindings
-  terraform-app/           App namespace, connection Secret, image publishing, service
+  core/  AKS, ACR, managed identities, permissions, Azure disk
+  db/    MongoDB, DB namespace, users, persistent volume bindings
+  app/   App namespace, connection Secret, image publishing, service
   Invoke-BootstrapTerraformStorage.ps1
+  Invoke-TerraformDeploy.ps1
   Invoke-DestroyInfrastructure.ps1
 ```
 
-Apply in order: **core-compute → db → app**. Routine service releases run only `terraform-app`; that project reads database outputs without planning or changing database resources. Database image/configuration changes run `terraform-db` separately. These can be independent CI jobs/pipelines, with ordering required only when their prerequisites change.
+Apply in order: **core → db → app**. Routine service releases run only `app`; that project reads database outputs without planning or changing database resources. Database image/configuration changes run `db` separately. These can be independent CI jobs/pipelines, with ordering required only when their prerequisites change.
 
 | Project | State blob in `mbtfdev8d7fc1c` / `tfstate-dev` |
 | --- | --- |
-| `terraform-core-compute` | `mongo-bench/dev/core-compute.tfstate` |
-| `terraform-db` | `mongo-bench/dev/db.tfstate` |
-| `terraform-app` | `mongo-bench/dev/app.tfstate` |
+| `core` | `mongo-bench/dev/core-compute.tfstate` |
+| `db` | `mongo-bench/dev/db.tfstate` |
+| `app` | `mongo-bench/dev/app.tfstate` |
+
+The `core` project retains the existing `core-compute.tfstate` blob key so existing deployments keep their state.
 
 ## Resources
 
@@ -29,13 +32,13 @@ Apply in order: **core-compute → db → app**. Routine service releases run on
 | Application | `mongo-bench-app-dev`; service deployment disabled until an image is configured |
 | MongoDB data | 32 GiB Standard SSD Azure disk in `rg-mongo-bench-dev-data`, mounted at `/data/db` |
 
-Core-compute owns the physical disk; db owns its Kubernetes PV/PVC and MongoDB. App owns only its namespace, connection Secret, optional service Deployment/Service, and local image publishing. Kubernetes API configuration comes from core-compute outputs. App obtains a database-scoped connection URI from db outputs, not database administrator credentials.
+Core owns the physical disk; db owns its Kubernetes PV/PVC and MongoDB. App owns only its namespace, connection Secret, optional service Deployment/Service, and local image publishing. Kubernetes API configuration comes from core outputs. App obtains a database-scoped connection URI from db outputs, not database administrator credentials.
 
 AKS Free refers to the control-plane tier. Nodes, node OS disks, database disk, ACR, networking, and state storage incur charges. Check North Central US VM availability and subscription quota before applying; rolling node upgrades need capacity for one extra node. The dev system node pool also hosts the workloads.
 
 ## Authentication and access
 
-Core-compute configures these roles:
+Core configures these roles:
 
 - AKS **kubelet user-assigned identity**: `AcrPull` on ACR, with no image-pull Secret or registry admin password.
 - AKS **control-plane user-assigned identity**: `Managed Identity Operator` on the kubelet identity and `Contributor` on the dedicated data group for Azure Disk CSI attachment.
@@ -44,7 +47,7 @@ Core-compute configures these roles:
 
 AKS uses Microsoft Entra authentication and Azure RBAC; local accounts are disabled. Kubernetes providers use `kubelogin --login azurecli` for short-lived tokens. OIDC/Workload Identity are enabled for future Azure service access; image pulls use the kubelet identity.
 
-The AKS API is public and requires Entra sign-in. Restrict it with `aks_api_allowed_cidrs` in core-compute if desired; an empty set leaves the authenticated endpoint publicly reachable. MongoDB has no public service. Its network policy permits TCP 27017 only from the app and database namespaces, enforced by Azure CNI Overlay with Cilium.
+The AKS API is public and requires Entra sign-in. Restrict it with `aks_api_allowed_cidrs` in core if desired; an empty set leaves the authenticated endpoint publicly reachable. MongoDB has no public service. Its network policy permits TCP 27017 only from the app and database namespaces, enforced by Azure CNI Overlay with Cilium.
 
 References: [AKS/ACR integration](https://learn.microsoft.com/azure/aks/cluster-container-registry-integration), [Azure RBAC for AKS](https://learn.microsoft.com/azure/aks/manage-azure-rbac), [static Azure Disk volumes](https://learn.microsoft.com/azure/aks/create-volume-azure-disk).
 
@@ -68,6 +71,30 @@ Bootstrap selects subscription `b8d7fc1c-6003-4425-baf0-15d8db0e1714`, creates/r
 
 New bootstrap storage uses `northcentralus`; existing storage in `eastus` stays there. Compute/data locations are configured independently. Az PowerShell and Azure CLI have separate sessions; sign into both using the intended identity. Bootstrap stays outside the projects whose state it stores.
 
+## Terraform deployment wrapper
+
+Load the command once per PowerShell session (from `infra/`):
+
+```powershell
+. ./Invoke-TerraformDeploy.ps1
+Invoke-TerraformDeploy -Env dev -Project core -Plan
+Invoke-TerraformDeploy -Env dev -Project core -Apply
+```
+
+After loading, the command works from any directory without changing your current location. You can also run the script directly, for example `./infra/Invoke-TerraformDeploy.ps1 -Env dev -Project app -Plan` from the service repository root.
+
+| `-Project` | Terraform root |
+| --- | --- |
+| `core` (also `core-infra`) | `core` |
+| `db` | `db` |
+| `app` | `app` |
+
+`-Env` and `-Project` are required, with exactly one of `-Plan` or `-Apply`. Only `dev` is accepted because the Terraform backends and resources currently target dev; production needs separate configuration first. Each invocation initializes and validates only the selected project, using its committed provider lock file, checked-in backend, project-local `.terraform/` directory, and default workspace. Temporary `TF_DATA_DIR` and `TF_WORKSPACE` changes are restored afterward. Unset `TF_CLI_ARGS*` overrides before using the wrapper.
+
+`-Plan` saves a Git-ignored `dev.tfplan` inside the selected project. Review the displayed plan, then use `-Apply` to apply that exact saved plan **without another approval prompt**. Apply requires a plan for that project and removes it after success. Planning removes any older plan first; failed planning leaves no saved plan to apply. Run `-Plan` again after changing inputs/configuration or recovering from a failed apply. Plans can contain credentials; protect them like Terraform state. Local `terraform.tfvars` and `*.auto.tfvars` files load normally from the project directory.
+
+The wrapper deploys one project at a time. For initial setup, run plan/apply pairs in **core → db → app** order. For routine service releases, select only `app`.
+
 ## Initial dev deployment
 
 All inputs have dev defaults. Local `terraform.tfvars` files and saved plans are Git-ignored. Remove obsolete Atlas variables from existing local settings. Use each project's `terraform.tfvars.example` for its inputs; copy only if no local settings file exists.
@@ -75,29 +102,24 @@ All inputs have dev defaults. Local `terraform.tfvars` files and saved plans are
 ```powershell
 az login
 az account set --subscription b8d7fc1c-6003-4425-baf0-15d8db0e1714
+. ./Invoke-TerraformDeploy.ps1
 
-terraform -chdir=terraform-core-compute init
-terraform -chdir=terraform-core-compute validate
-terraform -chdir=terraform-core-compute plan -out=core-compute.tfplan
-terraform -chdir=terraform-core-compute apply core-compute.tfplan
+Invoke-TerraformDeploy -Env dev -Project core -Plan
+Invoke-TerraformDeploy -Env dev -Project core -Apply
 
-$aksName = terraform -chdir=terraform-core-compute output -raw aks_name
-$resourceGroup = terraform -chdir=terraform-core-compute output -raw resource_group_name
+$aksName = terraform -chdir=core output -raw aks_name
+$resourceGroup = terraform -chdir=core output -raw resource_group_name
 az aks get-credentials --resource-group $resourceGroup --name $aksName --overwrite-existing
 kubelogin convert-kubeconfig -l azurecli
 kubectl get nodes
 
-terraform -chdir=terraform-db init
-terraform -chdir=terraform-db validate
-terraform -chdir=terraform-db plan -out=db.tfplan
-terraform -chdir=terraform-db apply db.tfplan
+Invoke-TerraformDeploy -Env dev -Project db -Plan
+Invoke-TerraformDeploy -Env dev -Project db -Apply
 kubectl -n mongo-bench-db-dev get pods,pvc,jobs
 kubectl -n mongo-bench-db-dev rollout status statefulset/mongodb --timeout=600s
 
-terraform -chdir=terraform-app init
-terraform -chdir=terraform-app validate
-terraform -chdir=terraform-app plan -out=app.tfplan
-terraform -chdir=terraform-app apply app.tfplan
+Invoke-TerraformDeploy -Env dev -Project app -Plan
+Invoke-TerraformDeploy -Env dev -Project app -Apply
 ```
 
 Db initializes the root account on an empty disk, then runs a Job to initiate `rs0` and create the `mongo-bench` user with `readWrite` on `mongo_bench`. The job retries startup and preserves existing users/data when rerun. Db apply must complete before app reads its connection output. Inspect failed bootstrap logs with `kubectl -n mongo-bench-db-dev logs job/<bootstrap-job-name>`.
@@ -106,7 +128,7 @@ Db initializes the root account on an empty disk, then runs a Job to initiate `r
 
 There is no Go service or Dockerfile yet. App creates its namespace and database connection Secret without a service image. The future service must listen on `HTTP_ADDR` (default `:8080`) and read `MONGODB_URI` and `MONGODB_DATABASE`.
 
-Once the service has a Dockerfile at the service repository root, configure `terraform-app/terraform.tfvars`:
+Once the service has a Dockerfile at the service repository root, configure `app/terraform.tfvars`:
 
 ```hcl
 application = {
@@ -117,11 +139,12 @@ application = {
 }
 ```
 
-The build context is relative to the `terraform-app` project, so `../..` reaches the service repository root. For each release, update its unique tag/source revision, then run:
+The build context is relative to the `app` project, so `../..` reaches the service repository root. For each release, update its unique tag/source revision, then run:
 
 ```powershell
-terraform -chdir=terraform-app plan -out=app.tfplan
-terraform -chdir=terraform-app apply app.tfplan
+. ./Invoke-TerraformDeploy.ps1
+Invoke-TerraformDeploy -Env dev -Project app -Plan
+Invoke-TerraformDeploy -Env dev -Project app -Apply
 ```
 
 The optional local-exec provisioner signs into ACR using Azure CLI, builds Linux amd64, pushes `<acr-login-server>/mongo-bench:<image_tag>`, and only then updates the app Deployment. Build/push failure stops deployment; Terraform waits for the app rollout. Apply runs on the machine performing the build. Change tag/revision for every source change, including uncommitted changes; Terraform does not scan the build context and saved plans do not snapshot source files. App runs do not initialize, plan, or apply the database project.
@@ -129,24 +152,24 @@ The optional local-exec provisioner signs into ACR using Azure CLI, builds Linux
 For a manually built/pushed image, omit `build_context` and use the matching image tag:
 
 ```powershell
-$acrName = terraform -chdir=terraform-core-compute output -raw acr_name
-$acrServer = terraform -chdir=terraform-core-compute output -raw acr_login_server
+$acrName = terraform -chdir=core output -raw acr_name
+$acrServer = terraform -chdir=core output -raw acr_login_server
 az acr login --name $acrName
 $image = "${acrServer}/mongo-bench:dev-<git-commit-sha>"
 docker build --platform linux/amd64 --tag $image ..
 docker push $image
-# Set application.image_tag in terraform-app/terraform.tfvars, then apply app only.
+# Set application.image_tag in app/terraform.tfvars, then apply app only.
 ```
 
 The app exposes an internal ClusterIP service: `kubectl -n mongo-bench-app-dev port-forward service/mongo-bench 8080:80`. Public ingress/HTTPS are future work.
 
 ## Database updates and persistence
 
-Change MongoDB image/configuration in `terraform-db`, then plan/apply **that project**. Image upgrades recreate the bootstrap Job while preserving the disk and users. Review MongoDB upgrade compatibility before changing versions. A regular app release does not run this project.
+Change MongoDB image/configuration in `db`, then plan/apply **that project**. Image upgrades recreate the bootstrap Job while preserving the disk and users. Review MongoDB upgrade compatibility before changing versions. A regular app release does not run this project.
 
-MongoDB mounts the same `mongodb-data` claim at `/data/db`. Its statically bound PV points to the Azure disk from core-compute, uses `Retain`, and has `ReadWriteOnce` access. Pod restarts, rescheduling, and image changes reuse the disk. One member owns the disk; scaling the StatefulSet is not a replication strategy.
+MongoDB mounts the same `mongodb-data` claim at `/data/db`. Its statically bound PV points to the Azure disk from core, uses `Retain`, and has `ReadWriteOnce` access. Pod restarts, rescheduling, and image changes reuse the disk. One member owns the disk; scaling the StatefulSet is not a replication strategy.
 
-`prevent_destroy` protects the data resource group and disk in core-compute and the DB namespace, PV, PVC, and bootstrap Secret in db. Normal full destroys are intentionally blocked; the explicit teardown script below overrides these guards in temporary copies. The disk lives outside `rg-mongo-bench-dev-nodes`, so cluster deletion does not delete it. Cluster recreation still requires recovery of Kubernetes resources and state/credentials against that disk. Clear a retained PV's old claim binding before manually rebinding a deleted PVC; never attach one disk to two live MongoDB instances. Disk expansion requires planned disk/PV/PVC/filesystem maintenance; do not shrink it.
+`prevent_destroy` protects the data resource group and disk in core and the DB namespace, PV, PVC, and bootstrap Secret in db. Normal full destroys are intentionally blocked; the explicit teardown script below overrides these guards in temporary copies. The disk lives outside `rg-mongo-bench-dev-nodes`, so cluster deletion does not delete it. Cluster recreation still requires recovery of Kubernetes resources and state/credentials against that disk. Clear a retained PV's old claim binding before manually rebinding a deleted PVC; never attach one disk to two live MongoDB instances. Disk expansion requires planned disk/PV/PVC/filesystem maintenance; do not shrink it.
 
 Db state holds generated root/app passwords and the replica-set key. Its sensitive application URI output is copied by app into the app namespace's `mongo-bench-database` Secret. Both states therefore contain application credentials. App's remote-state access technically grants access to the entire db state, including administrator credentials; sensitivity hides normal CLI output, not backend contents. Keep backend access limited to trusted operators and preserve state/version history. Losing db state can regenerate credentials that do not match users on the retained disk. Updating a Secret alone is not a MongoDB password rotation.
 
@@ -168,7 +191,7 @@ After confirmation, it:
 
 1. Creates isolated temporary copies of each project, including local auto-loaded inputs and scripts, and initializes their backends using the committed provider locks. Cached `.terraform/` settings and local state/plans are excluded.
 2. Overrides `prevent_destroy` only in the temporary copies using Terraform [override files](https://developer.hashicorp.com/terraform/language/files/override); the repository's protections remain enabled.
-3. Runs `terraform destroy` with automatic approval in **app → db → core-compute** order, checking that each state is empty before continuing. AKS and upstream outputs remain available until their dependents have been destroyed.
+3. Runs `terraform destroy` with automatic approval in **app → db → core** order, checking that each state is empty before continuing. AKS and upstream outputs remain available until their dependents have been destroyed.
 4. Checks that no resources remain except the bootstrap state account. Unexpected resources stop cleanup and preserve state for recovery.
 5. Deletes any empty data/node resource groups, then [deletes the bootstrap resource group synchronously](https://learn.microsoft.com/cli/azure/group#az-group-delete). Its storage account `mbtfdev8d7fc1c`, container, state blobs/history, and container role assignment go last. Each group's absence is verified before continuing.
 
@@ -179,7 +202,7 @@ On any command failure, the script stops before later stages. Empty or missing s
 Run from `infra/`. Isolated `TF_DATA_DIR` directories avoid touching configured backends, and `-backend=false` installs providers without reading/changing Azure state:
 
 ```powershell
-foreach ($project in @('terraform-core-compute', 'terraform-db', 'terraform-app')) {
+foreach ($project in @('core', 'db', 'app')) {
     $env:TF_DATA_DIR = Join-Path ([System.IO.Path]::GetTempPath()) "mongo-bench-check-$project"
     terraform "-chdir=$project" init -backend=false
     terraform "-chdir=$project" validate
@@ -187,8 +210,9 @@ foreach ($project in @('terraform-core-compute', 'terraform-db', 'terraform-app'
 }
 Remove-Item Env:TF_DATA_DIR
 terraform fmt -check -recursive .
-node --test terraform-db/tests/bootstrap-mongodb.test.cjs
+node --test db/tests/bootstrap-mongodb.test.cjs
+pwsh -NoProfile -File tests/terraform-deploy.Tests.ps1
 pwsh -NoProfile -File tests/destroy-infrastructure.Tests.ps1
 ```
 
-Tests cover identity wiring, data isolation, retained static volume binding, MongoDB bootstrap ordering/retry/idempotency, separate app credentials, optional local publishing, app-only deployment plans, and teardown confirmation/ordering/failure recovery. The teardown tests mock all Azure and Terraform commands and make no cloud changes.
+Tests cover identity wiring, data isolation, retained static volume binding, MongoDB bootstrap ordering/retry/idempotency, separate app credentials, optional local publishing, app-only deployment plans, deployment-wrapper project selection/saved plans/failure handling, and teardown confirmation/ordering/failure recovery. The PowerShell tests mock all Azure and Terraform commands and make no cloud changes.

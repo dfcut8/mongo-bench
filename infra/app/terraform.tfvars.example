@@ -1,4 +1,4 @@
-# Apply terraform-core-compute and terraform-db before this project.
+# Apply core and db before this project.
 # The app namespace and its database Secret are created without a service image.
 # Enable this only after the Go service has a Dockerfile and supports the
 # HTTP_ADDR, MONGODB_URI, and MONGODB_DATABASE environment variables.

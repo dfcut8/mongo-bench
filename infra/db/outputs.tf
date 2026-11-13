@@ -12,7 +12,7 @@ output "database_name" {
 }
 
 output "application_mongodb_uri" {
-  description = "Database-scoped application credentials consumed by terraform-app. Protect access to database and application state."
+  description = "Database-scoped application credentials consumed by app. Protect access to database and application state."
   value       = "mongodb://mongo-bench:${random_password.app.result}@${local.mongodb_host}/${local.database}?authSource=${local.database}&replicaSet=rs0"
   sensitive   = true
 }

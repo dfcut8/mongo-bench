@@ -16,7 +16,7 @@ $fixture = Join-Path $testRoot 'infra'
 New-Item -ItemType Directory -Path $fixture -Force | Out-Null
 $infra = Split-Path $PSScriptRoot -Parent
 Copy-Item -LiteralPath (Join-Path $infra 'Invoke-DestroyInfrastructure.ps1') -Destination $fixture
-foreach ($project in @('terraform-app', 'terraform-db', 'terraform-core-compute')) {
+foreach ($project in @('app', 'db', 'core')) {
     $destination = Join-Path $fixture $project
     New-Item -ItemType Directory -Path $destination | Out-Null
     Get-ChildItem -LiteralPath (Join-Path $infra $project) -File -Force |
@@ -50,6 +50,7 @@ function az {
         'storage account' { return '[{"name":"mbtfdev8d7fc1c"}]' }
         'storage blob' {
             $key = $arguments[[Array]::IndexOf($arguments, '--name') + 1]
+            Assert-True ($key -in @('mongo-bench/dev/app.tfstate', 'mongo-bench/dev/db.tfstate', 'mongo-bench/dev/core-compute.tfstate')) 'Project renames must preserve deployed state blob keys.'
             $exists = $key -notin $global:MongoBenchDestroyTest.MissingBlobs
             return (@{ exists = $exists } | ConvertTo-Json)
         }
@@ -94,7 +95,7 @@ function terraform {
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $directory 'terraform.tfstate'))) 'Local state must not be copied.'
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $directory '.terraform/environment'))) 'Cached workspace must not be copied.'
         $override = Join-Path $directory 'teardown_override.tf.json'
-        if ($project -ne 'terraform-app') {
+        if ($project -ne 'app') {
             $resources = (Get-Content -LiteralPath $override -Raw | ConvertFrom-Json -AsHashtable).resource
             foreach ($type in $resources.Values) {
                 foreach ($resource in $type.Values) { Assert-True ($resource.lifecycle.prevent_destroy -eq $false) 'Destroy protection must be overridden.' }
@@ -111,6 +112,9 @@ function terraform {
         $global:MongoBenchDestroyTest.Destroyed.Add($project)
         Assert-True ($arguments -contains '-auto-approve') 'Only the script confirmation should be needed.'
         Assert-True ($arguments -contains '-lock-timeout=5m') 'State locking must remain enabled.'
+        if ($project -eq 'core') {
+            Assert-True ($arguments -contains '-var=subscription_id=b8d7fc1c-6003-4425-baf0-15d8db0e1714') 'Core destroy must pin the subscription input.'
+        }
         if ($project -eq $global:MongoBenchDestroyTest.DestroyFailure) { $global:LASTEXITCODE = 1; return }
         if ($project -ne $global:MongoBenchDestroyTest.StuckState) { $global:MongoBenchDestroyTest.States[$project] = $false }
         return 'Destroyed mock resources'
@@ -126,7 +130,7 @@ function Run-Scenario {
     $global:MongoBenchDestroyTest.TemporaryRoots = [Collections.Generic.HashSet[string]]::new()
     $global:MongoBenchDestroyTest.Confirmation = 'DELETE mongo-bench-dev'
     $global:MongoBenchDestroyTest.Groups = @{ 'rg-mongo-bench-dev' = $true; 'rg-mongo-bench-dev-data' = $true; 'rg-mongo-bench-dev-nodes' = $true }
-    $global:MongoBenchDestroyTest.States = @{ 'terraform-app' = $true; 'terraform-db' = $true; 'terraform-core-compute' = $true }
+    $global:MongoBenchDestroyTest.States = @{ 'app' = $true; 'db' = $true; 'core' = $true }
     $global:MongoBenchDestroyTest.DestroyFailure = ''
     $global:MongoBenchDestroyTest.InitFailure = ''
     $global:MongoBenchDestroyTest.DeleteFailure = ''
@@ -165,10 +169,10 @@ try {
     $env:TF_DATA_DIR = 'original-test-data'
     $env:ARM_SUBSCRIPTION_ID = 'original-test-subscription'
     Run-Scenario 'full teardown order and storage last' {} {
-        Assert-True (($global:MongoBenchDestroyTest.Destroyed -join ',') -eq 'terraform-app,terraform-db,terraform-core-compute') 'Wrong destroy order.'
+        Assert-True (($global:MongoBenchDestroyTest.Destroyed -join ',') -eq 'app,db,core') 'Wrong destroy order.'
         Assert-True (($global:MongoBenchDestroyTest.DeletedGroups -join ',') -eq 'rg-mongo-bench-dev-data,rg-mongo-bench-dev-nodes,rg-mongo-bench-dev') 'Storage must go last.'
-        Assert-True ($global:MongoBenchDestroyTest.Events.IndexOf('confirm') -lt $global:MongoBenchDestroyTest.Events.IndexOf('terraform-app init')) 'Confirmation must precede initialization.'
-        Assert-True ($global:MongoBenchDestroyTest.Events.IndexOf('terraform-core-compute init') -lt $global:MongoBenchDestroyTest.Events.IndexOf('terraform-app destroy')) 'All backends must be checked before destruction.'
+        Assert-True ($global:MongoBenchDestroyTest.Events.IndexOf('confirm') -lt $global:MongoBenchDestroyTest.Events.IndexOf('app init')) 'Confirmation must precede initialization.'
+        Assert-True ($global:MongoBenchDestroyTest.Events.IndexOf('core init') -lt $global:MongoBenchDestroyTest.Events.IndexOf('app destroy')) 'All backends must be checked before destruction.'
     }
     foreach ($answer in @('', 'yes', 'delete mongo-bench-dev')) {
         Run-Scenario "cancel with '$answer'" { $global:MongoBenchDestroyTest.Confirmation = $answer } {
@@ -176,30 +180,30 @@ try {
             Assert-True ($global:MongoBenchDestroyTest.Events.Count -eq 1) 'Cancellation must precede all infrastructure operations.'
         }
     }
-    Run-Scenario 'database failure preserves core and storage' { $global:MongoBenchDestroyTest.DestroyFailure = 'terraform-db' } {
-        Assert-True (($global:MongoBenchDestroyTest.Destroyed -join ',') -eq 'terraform-app,terraform-db') 'Core destroy must not start after DB failure.'
+    Run-Scenario 'database failure preserves core and storage' { $global:MongoBenchDestroyTest.DestroyFailure = 'db' } {
+        Assert-True (($global:MongoBenchDestroyTest.Destroyed -join ',') -eq 'app,db') 'Core destroy must not start after DB failure.'
         Assert-True ($global:MongoBenchDestroyTest.DeletedGroups.Count -eq 0) 'No group deletion is allowed after Terraform failure.'
     } 'Terraform failed'
-    Run-Scenario 'backend initialization failure prevents all deletion' { $global:MongoBenchDestroyTest.InitFailure = 'terraform-core-compute' } {
+    Run-Scenario 'backend initialization failure prevents all deletion' { $global:MongoBenchDestroyTest.InitFailure = 'core' } {
         Assert-True ($global:MongoBenchDestroyTest.Destroyed.Count -eq 0 -and $global:MongoBenchDestroyTest.DeletedGroups.Count -eq 0) 'Backend failures must precede all destruction.'
     } 'Terraform failed'
     Run-Scenario 'missing state storage with remaining resources' { $global:MongoBenchDestroyTest.Groups['rg-mongo-bench-dev'] = $false } {
         Assert-True ($global:MongoBenchDestroyTest.Destroyed.Count -eq 0 -and $global:MongoBenchDestroyTest.DeletedGroups.Count -eq 0) 'Missing state storage must block destruction.'
     } 'state storage resource group is missing'
-    Run-Scenario 'nonempty state stops teardown' { $global:MongoBenchDestroyTest.StuckState = 'terraform-app' } {
+    Run-Scenario 'nonempty state stops teardown' { $global:MongoBenchDestroyTest.StuckState = 'app' } {
         Assert-True ($global:MongoBenchDestroyTest.Destroyed.Count -eq 1 -and $global:MongoBenchDestroyTest.DeletedGroups.Count -eq 0) 'Nonempty state must stop later stages.'
     } 'still has state entries'
     Run-Scenario 'resume after app and DB already destroyed' {
-        $global:MongoBenchDestroyTest.States['terraform-app'] = $false
-        $global:MongoBenchDestroyTest.States['terraform-db'] = $false
+        $global:MongoBenchDestroyTest.States['app'] = $false
+        $global:MongoBenchDestroyTest.States['db'] = $false
     } {
-        Assert-True (($global:MongoBenchDestroyTest.Destroyed -join ',') -eq 'terraform-core-compute') 'Empty states must be skipped without reading missing upstream outputs.'
+        Assert-True (($global:MongoBenchDestroyTest.Destroyed -join ',') -eq 'core') 'Empty states must be skipped without reading missing upstream outputs.'
     }
     Run-Scenario 'never-applied application' {
         $global:MongoBenchDestroyTest.MissingBlobs = @('mongo-bench/dev/app.tfstate')
-        $global:MongoBenchDestroyTest.States['terraform-app'] = $false
+        $global:MongoBenchDestroyTest.States['app'] = $false
     } {
-        Assert-True (($global:MongoBenchDestroyTest.Destroyed -join ',') -eq 'terraform-db,terraform-core-compute') 'Missing state must be skipped.'
+        Assert-True (($global:MongoBenchDestroyTest.Destroyed -join ',') -eq 'db,core') 'Missing state must be skipped.'
     }
     Run-Scenario 'untracked resources preserve state storage' { $global:MongoBenchDestroyTest.Residual = $true } {
         Assert-True ($global:MongoBenchDestroyTest.DeletedGroups.Count -eq 0) 'Unexpected Azure resources must block group deletion.'
@@ -212,7 +216,7 @@ try {
     } {
         Assert-True ($global:MongoBenchDestroyTest.Destroyed.Count -eq 0 -and $global:MongoBenchDestroyTest.DeletedGroups.Count -eq 0) 'An already deleted environment needs no changes.'
     }
-    foreach ($project in @('terraform-db', 'terraform-core-compute')) {
+    foreach ($project in @('db', 'core')) {
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $fixture "$project/teardown_override.tf.json"))) 'Source override file leaked.'
         Assert-True ([bool](Get-ChildItem (Join-Path $fixture "$project/*.tf") | Select-String 'prevent_destroy = true')) 'Source destroy guards must stay enabled.'
     }
