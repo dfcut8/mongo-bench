@@ -18,14 +18,15 @@ $StorageAccountName = 'mbtfdev8d7fc1c'
 $ContainerName = 'tfstate-dev'
 $ResourceGroups = @('rg-mongo-bench-dev-data', 'rg-mongo-bench-dev-nodes', $ResourceGroupName)
 $Projects = @(
-    @{ Name = 'terraform-app'; Key = 'app'; Protected = @{} },
-    @{ Name = 'terraform-db'; Key = 'db'; Protected = @{
+    @{ Name = 'app'; Key = 'app'; Protected = @{} },
+    @{ Name = 'db'; Key = 'db'; Protected = @{
         kubernetes_namespace_v1 = 'db'
         kubernetes_secret_v1 = 'mongodb'
         kubernetes_persistent_volume_v1 = 'mongodb'
         kubernetes_persistent_volume_claim_v1 = 'mongodb'
     } },
-    @{ Name = 'terraform-core-compute'; Key = 'core-compute'; Protected = @{
+    # Keep the deployed state blob key independent of the local project name.
+    @{ Name = 'core'; Key = 'core-compute'; Protected = @{
         azurerm_resource_group = 'data'
         azurerm_managed_disk = 'mongodb'
     } }
@@ -68,7 +69,7 @@ if ($account.id -ne $SubscriptionId) { throw 'Unable to select the dev subscript
 
 Write-Host "Subscription: $($account.name) ($SubscriptionId)"
 Write-Host "Permanently delete ALL contents of: $($ResourceGroups -join ', ')"
-Write-Host 'Order: terraform-app -> terraform-db -> terraform-core-compute -> state storage resource group.'
+Write-Host 'Order: app -> db -> core -> state storage resource group.'
 Write-Host 'This includes all MongoDB data, container images, credentials, and Terraform state/version history.'
 $confirmation = Read-Host 'Type DELETE mongo-bench-dev to confirm'
 if ($confirmation -cne 'DELETE mongo-bench-dev') {
@@ -147,7 +148,7 @@ try {
         Write-Host "Destroying $($project.Name)..."
         $env:TF_DATA_DIR = Join-Path $project.Directory '.terraform'
         $arguments = @('destroy', '-auto-approve', '-input=false', '-lock-timeout=5m', '-no-color')
-        if ($project.Key -eq 'core-compute') { $arguments += "-var=subscription_id=$SubscriptionId" }
+        if ($project.Name -eq 'core') { $arguments += "-var=subscription_id=$SubscriptionId" }
         Invoke-Terraform $project.Directory $arguments | Out-Host
         if (@(Invoke-Terraform $project.Directory @('state', 'list')).Count -gt 0) {
             throw "$($project.Name) still has state entries. State storage has not been deleted."

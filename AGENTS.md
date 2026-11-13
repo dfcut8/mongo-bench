@@ -16,7 +16,7 @@ See [docs/architecture.md](docs/architecture.md) for the proposed architecture, 
 
 This repository owns one service. Keep the Go module at the repository root, with executable entry points under `cmd/` and implementation packages under `internal/`; do not introduce a top-level `src/` directory for now. Keep service documentation under `docs/` and infrastructure code under `infra/`. Choose package boundaries as the implementation develops rather than creating a fixed hierarchy in advance.
 
-Treat `infra/` as the infrastructure monorepo root. Its sibling Terraform projects are `terraform-core-compute` (Azure compute, registry, identities, and persistent disk), `terraform-db` (MongoDB, database credentials, and persistent volume bindings), and `terraform-app` (application namespace, connection Secret, and service deployment). Each project has its own Terraform root, providers, lock file, and state. Apply core-compute, then db, then app. Routine app releases must not plan or apply database resources.
+Treat `infra/` as the infrastructure monorepo root. Its sibling Terraform projects are `core` (Azure compute, registry, identities, and persistent disk), `db` (MongoDB, database credentials, and persistent volume bindings), and `app` (application namespace, connection Secret, and service deployment). Each project has its own Terraform root, providers, lock file, and state. Apply core, then db, then app. Routine app releases must not plan or apply database resources.
 
 ## Implementation guidance
 
