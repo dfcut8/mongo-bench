@@ -8,6 +8,7 @@ infra/
   terraform-db/            MongoDB, DB namespace, users, persistent volume bindings
   terraform-app/           App namespace, connection Secret, image publishing, service
   Invoke-BootstrapTerraformStorage.ps1
+  Invoke-DestroyInfrastructure.ps1
 ```
 
 Apply in order: **core-compute → db → app**. Routine service releases run only `terraform-app`; that project reads database outputs without planning or changing database resources. Database image/configuration changes run `terraform-db` separately. These can be independent CI jobs/pipelines, with ordering required only when their prerequisites change.
@@ -145,11 +146,33 @@ Change MongoDB image/configuration in `terraform-db`, then plan/apply **that pro
 
 MongoDB mounts the same `mongodb-data` claim at `/data/db`. Its statically bound PV points to the Azure disk from core-compute, uses `Retain`, and has `ReadWriteOnce` access. Pod restarts, rescheduling, and image changes reuse the disk. One member owns the disk; scaling the StatefulSet is not a replication strategy.
 
-`prevent_destroy` protects the data resource group and disk in core-compute and the DB namespace, PV, PVC, and bootstrap Secret in db. Normal full destroys are intentionally blocked. The disk lives outside `rg-mongo-bench-dev-nodes`, so cluster deletion does not delete it. Cluster recreation still requires recovery of Kubernetes resources and state/credentials against that disk. Clear a retained PV's old claim binding before manually rebinding a deleted PVC; never attach one disk to two live MongoDB instances. Disk expansion requires planned disk/PV/PVC/filesystem maintenance; do not shrink it.
+`prevent_destroy` protects the data resource group and disk in core-compute and the DB namespace, PV, PVC, and bootstrap Secret in db. Normal full destroys are intentionally blocked; the explicit teardown script below overrides these guards in temporary copies. The disk lives outside `rg-mongo-bench-dev-nodes`, so cluster deletion does not delete it. Cluster recreation still requires recovery of Kubernetes resources and state/credentials against that disk. Clear a retained PV's old claim binding before manually rebinding a deleted PVC; never attach one disk to two live MongoDB instances. Disk expansion requires planned disk/PV/PVC/filesystem maintenance; do not shrink it.
 
 Db state holds generated root/app passwords and the replica-set key. Its sensitive application URI output is copied by app into the app namespace's `mongo-bench-database` Secret. Both states therefore contain application credentials. App's remote-state access technically grants access to the entire db state, including administrator credentials; sensitivity hides normal CLI output, not backend contents. Keep backend access limited to trusted operators and preserve state/version history. Losing db state can regenerate credentials that do not match users on the retained disk. Updating a Secret alone is not a MongoDB password rotation.
 
 Retention is not backup or high availability. Dev has one replica-set member, no automatic backups, restart/rescheduling downtime, and authenticated internal TCP without TLS. Production requires separate infrastructure, replication, tested backups/restores, TLS, and monitoring. To verify a live deployment, insert a test document, restart `mongodb-0`, wait for readiness, and read it again; also test committed and aborted multi-document transactions. Local mock tests do not prove Azure provisioning or disk reattachment.
+
+## Complete dev teardown
+
+From `infra/`, run:
+
+```powershell
+./Invoke-DestroyInfrastructure.ps1
+```
+
+The script displays subscription `b8d7fc1c-6003-4425-baf0-15d8db0e1714` and the three dev resource groups, then requires the exact confirmation `DELETE mongo-bench-dev`. This permanently deletes **all MongoDB data, ACR images, credentials, and Terraform state/version history**. It is scoped to this repository's dev environment: `rg-mongo-bench-dev`, `rg-mongo-bench-dev-data`, and `rg-mongo-bench-dev-nodes`. Other subscription resources are outside its scope. Do not run deployments concurrently with teardown.
+
+Use PowerShell 7.2+, Terraform, Azure CLI signed in with `az login`, and kubelogin, with the same state/container permissions and AKS access used for deployment, plus permission to delete the bootstrap storage and resource group. Az PowerShell modules are not required. Keep the same local `terraform.tfvars` / `*.auto.tfvars` inputs used for deployment; inputs supplied previously with `-var-file` must be copied into an auto-loaded variable file first. The script supports the checked-in dev backends and default workspace, rejects `TF_CLI_ARGS*`, pins the Azure subscription, and restores any temporary environment-variable changes afterward.
+
+After confirmation, it:
+
+1. Creates isolated temporary copies of each project, including local auto-loaded inputs and scripts, and initializes their backends using the committed provider locks. Cached `.terraform/` settings and local state/plans are excluded.
+2. Overrides `prevent_destroy` only in the temporary copies using Terraform [override files](https://developer.hashicorp.com/terraform/language/files/override); the repository's protections remain enabled.
+3. Runs `terraform destroy` with automatic approval in **app → db → core-compute** order, checking that each state is empty before continuing. AKS and upstream outputs remain available until their dependents have been destroyed.
+4. Checks that no resources remain except the bootstrap state account. Unexpected resources stop cleanup and preserve state for recovery.
+5. Deletes any empty data/node resource groups, then [deletes the bootstrap resource group synchronously](https://learn.microsoft.com/cli/azure/group#az-group-delete). Its storage account `mbtfdev8d7fc1c`, container, state blobs/history, and container role assignment go last. Each group's absence is verified before continuing.
+
+On any command failure, the script stops before later stages. Empty or missing state blobs are skipped so you can rerun after a partial deployment or interrupted teardown; remaining untracked Azure resources still block storage deletion. Temporary files are removed on success and retained with their path on failure for recovery (they may contain credentials or emergency local state; protect them and remove them after recovery). If storage is already missing while other dev groups remain, recover state before retrying. Rebuilding after complete teardown starts with the storage bootstrap again.
 
 ## Local validation
 
@@ -165,6 +188,7 @@ foreach ($project in @('terraform-core-compute', 'terraform-db', 'terraform-app'
 Remove-Item Env:TF_DATA_DIR
 terraform fmt -check -recursive .
 node --test terraform-db/tests/bootstrap-mongodb.test.cjs
+pwsh -NoProfile -File tests/destroy-infrastructure.Tests.ps1
 ```
 
-Tests cover identity wiring, data isolation, retained static volume binding, MongoDB bootstrap ordering/retry/idempotency, separate app credentials, optional local publishing, and app-only deployment plans.
+Tests cover identity wiring, data isolation, retained static volume binding, MongoDB bootstrap ordering/retry/idempotency, separate app credentials, optional local publishing, app-only deployment plans, and teardown confirmation/ordering/failure recovery. The teardown tests mock all Azure and Terraform commands and make no cloud changes.
